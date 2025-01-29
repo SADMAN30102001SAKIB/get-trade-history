@@ -1,37 +1,86 @@
-import asyncio
-from datetime import datetime
+import logging
+import os
+from datetime import datetime, timedelta, timezone
+from typing import Any, Dict, Optional
 
-from flask import Flask, jsonify
-from flask_caching import Cache
-from flask_cors import CORS
+from dotenv import load_dotenv
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
 from metaapi_cloud_sdk import MetaStats
+from pydantic_settings import BaseSettings
 
-app = Flask(__name__)
-CORS(app, resources={r"/*": {"origins": "*"}})
-cache = Cache(app, config={"CACHE_TYPE": "simple"})
+load_dotenv()
 
-token = "eyJhbGciOiJSUzUxMiIsInR5cCI6IkpXVCJ9.eyJfaWQiOiI2YmRmNjNiZjM4NjllOGU1MjE3NGViZWQ3YTE2NjQzYSIsInBlcm1pc3Npb25zIjpbXSwiYWNjZXNzUnVsZXMiOlt7ImlkIjoidHJhZGluZy1hY2NvdW50LW1hbmFnZW1lbnQtYXBpIiwibWV0aG9kcyI6WyJ0cmFkaW5nLWFjY291bnQtbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiYWNjb3VudDokVVNFUl9JRCQ6MzQyNTA0MjYtZjVjYS00ODI0LTg1YTItNDU3OGZlNWQ3ZTM3Il19LHsiaWQiOiJtZXRhYXBpLXJlc3QtYXBpIiwibWV0aG9kcyI6WyJtZXRhYXBpLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyJhY2NvdW50OiRVU0VSX0lEJDozNDI1MDQyNi1mNWNhLTQ4MjQtODVhMi00NTc4ZmU1ZDdlMzciXX0seyJpZCI6Im1ldGFhcGktcnBjLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbImFjY291bnQ6JFVTRVJfSUQkOjM0MjUwNDI2LWY1Y2EtNDgyNC04NWEyLTQ1NzhmZTVkN2UzNyJdfSx7ImlkIjoibWV0YWFwaS1yZWFsLXRpbWUtc3RyZWFtaW5nLWFwaSIsIm1ldGhvZHMiOlsibWV0YWFwaS1hcGk6d3M6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbImFjY291bnQ6JFVTRVJfSUQkOjM0MjUwNDI2LWY1Y2EtNDgyNC04NWEyLTQ1NzhmZTVkN2UzNyJdfSx7ImlkIjoibWV0YXN0YXRzLWFwaSIsIm1ldGhvZHMiOlsibWV0YXN0YXRzLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIl0sInJlc291cmNlcyI6WyJhY2NvdW50OiRVU0VSX0lEJDozNDI1MDQyNi1mNWNhLTQ4MjQtODVhMi00NTc4ZmU1ZDdlMzciXX0seyJpZCI6InJpc2stbWFuYWdlbWVudC1hcGkiLCJtZXRob2RzIjpbInJpc2stbWFuYWdlbWVudC1hcGk6cmVzdDpwdWJsaWM6KjoqIl0sInJvbGVzIjpbInJlYWRlciJdLCJyZXNvdXJjZXMiOlsiYWNjb3VudDokVVNFUl9JRCQ6MzQyNTA0MjYtZjVjYS00ODI0LTg1YTItNDU3OGZlNWQ3ZTM3Il19LHsiaWQiOiJjb3B5ZmFjdG9yeS1hcGkiLCJtZXRob2RzIjpbImNvcHlmYWN0b3J5LWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIiwid3JpdGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19LHsiaWQiOiJtdC1tYW5hZ2VyLWFwaSIsIm1ldGhvZHMiOlsibXQtbWFuYWdlci1hcGk6cmVzdDpkZWFsaW5nOio6KiIsIm10LW1hbmFnZXItYXBpOnJlc3Q6cHVibGljOio6KiJdLCJyb2xlcyI6WyJyZWFkZXIiLCJ3cml0ZXIiXSwicmVzb3VyY2VzIjpbIio6JFVTRVJfSUQkOioiXX0seyJpZCI6ImJpbGxpbmctYXBpIiwibWV0aG9kcyI6WyJiaWxsaW5nLWFwaTpyZXN0OnB1YmxpYzoqOioiXSwicm9sZXMiOlsicmVhZGVyIl0sInJlc291cmNlcyI6WyIqOiRVU0VSX0lEJDoqIl19XSwiaWdub3JlUmF0ZUxpbWl0cyI6ZmFsc2UsInRva2VuSWQiOiIyMDIxMDIxMyIsImltcGVyc29uYXRlZCI6ZmFsc2UsInJlYWxVc2VySWQiOiI2YmRmNjNiZjM4NjllOGU1MjE3NGViZWQ3YTE2NjQzYSIsImlhdCI6MTczODEyNjAwMH0.Vl5Fb9ZB-O-jdLBLC4I8CYjrRJgrHvnjFyAPI3YweomnVnHQpE0hgVP98yTor6DHjCNSLSxSTO-DLPaRbqyBjvxlWNxmBmGGqhNvlItnqegHUsEJ_R3kpUXbe06yb5ysX1efYlTH4T7uQg4xKlS2QP92q6GmyJzw1Z2iEtLZ6DVmM0kJgrdOJVxabSBnOgKeJVEBwiB9JQcegSMl_z3vJwTP1WyE-6ODXVLQh0_kN_gicQ4P3-LFNLAW_iXP0-K23ATPhGb-_cYN7cFqmrSF0pXhiMyN05rqJyHPzJnoYGRvH0asrJxMJw_0bI4DYjPsqHsdQqAmNehPjhRKuceXD6Osh_7t6tRmbXHCTU208DQqhGut7ZBDC_j-Kk8BxD25fexaOhAHeapMSewvJ7S8OF7Nn_PKBQ1C1CZtaEDUaMaARleZO9L7ReiS-UHeAg321abaqzbRkdPWis_feUGqRYupPtZR0uR467RKZ5B_6Tqpd7xx_opjAfsq0NQGgkXCGsW_wKB3BFIzR7EEcgNRCDdbOESX9atKsbMz47OB2CkI2acxroAz3nFI2h3Ij0RQPgDdFeF9WMYdlnW-rDI_QEgJuHvIRfU_I1G2YPzAlXSaMgakylT_2lro4PW0ogooL2hFK8dVr46wAWOJFTGbI5MmexW3sJoScHo-Dei4Qkw"
-account_id = "34250426-f5ca-4824-85a2-4578fe5d7e37"
+logging.basicConfig(
+    level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s"
+)
 
 
-async def get_full_trading_history():
-    meta_stats = MetaStats(token=token)
+class Settings(BaseSettings):
+    token: str = os.getenv("METAAPI_TOKEN", "")
+    account_id: str = os.getenv("METAAPI_ACCOUNT_ID", "")
+
+
+settings = Settings()
+
+app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "https://nexusfuturefund.vercel.app",
+        "http://localhost:3000",
+    ],
+    allow_credentials=True,
+    allow_methods=["GET"],
+    allow_headers=["*"],
+)
+
+meta_stats = MetaStats(token=settings.token)
+
+cache: Dict[str, Any] = {}
+CACHE_EXPIRY = timedelta(seconds=60)
+
+
+async def get_full_trading_history(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+):
     try:
-        start_time = "2025-01-01 00:00:00.000"
-        end_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        start_time = start_time or "2025-01-01 00:00:00.000"
+        end_time = (
+            end_time or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        )
+
+        logging.info(f"Fetching trading history from {start_time} to {end_time}")
+
         trades = await meta_stats.get_account_trades(
-            account_id=account_id,
+            account_id=settings.account_id,
             start_time=start_time,
             end_time=end_time,
             update_history=True,
         )
         return trades
     except Exception as e:
-        return {"error": str(e)}
+        logging.error(f"Error fetching trading history: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.route("/", methods=["GET"])
-@cache.cached(timeout=60)
-def trading_history():
-    result = asyncio.run(get_full_trading_history())
-    return jsonify(result)
+@app.get("/")
+async def trading_history(
+    start_time: Optional[str] = None, end_time: Optional[str] = None
+):
+    cache_key = f"{start_time}_{end_time}"
+    cache_entry = cache.get(cache_key)
+
+    # Check in-memory cache
+    if cache_entry and datetime.now(timezone.utc) - cache_entry["time"] < CACHE_EXPIRY:
+        logging.info("Serving from in-memory cache")
+        return cache_entry["data"]
+
+    # Fetch new data if cache miss
+    result = await get_full_trading_history(start_time, end_time)
+
+    # Store in cache
+    cache[cache_key] = {"data": result, "time": datetime.now(timezone.utc)}
+
+    return result
